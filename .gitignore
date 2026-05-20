@@ -1,0 +1,9 @@
+# UN-SANITISED workflow exports live here during sanitisation.
+# Never commit. Anything in this dir contains raw credential IDs,
+# internal URLs, and tenant-specific config.
+_pending/
+
+# Temporary import-test artifacts
+_import-test.json
+*.audit.txt
+*.sanitised.json

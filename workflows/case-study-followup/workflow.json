@@ -1,0 +1,91 @@
+{
+  "name": "[TrendAI] - Case Study Follow-up Sequence (v2 - postgres)",
+  "description": null,
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "case-study-followup",
+        "options": {}
+      },
+      "id": "11111111-aaaa-bbbb-cccc-000000000001",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Case Study Follow-up - Build 3 email tasks (Australia/Sydney timezone)\n// v2: writes to postgres-tos task_queue (no Task ID generation; bigserial assigns)\nconst raw = $input.item.json;\nconst webhook = raw.body || raw;\n\nfunction formatDateTimeAuSydney(date) {\n  const auDate = new Date(date.getTime() + (11 * 60 * 60 * 1000));\n  const year = auDate.getUTCFullYear();\n  const month = String(auDate.getUTCMonth() + 1).padStart(2, '0');\n  const day = String(auDate.getUTCDate()).padStart(2, '0');\n  const hours = String(auDate.getUTCHours()).padStart(2, '0');\n  const minutes = String(auDate.getUTCMinutes()).padStart(2, '0');\n  const seconds = String(auDate.getUTCSeconds()).padStart(2, '0');\n  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;\n}\n\nconst now = new Date();\nconst delays = [0, 3, 7]; // days — was hardcoded in v1, preserved\n\nconst templatePayload = {\n  first_name: webhook.first_name,\n  company_name: webhook.company_name,\n  industry: webhook.industry,\n  case_study_name: webhook.case_study_name\n};\n\nreturn delays.map((d, i) => {\n  const scheduled = new Date(now.getTime() + (d * 24 * 60 * 60 * 1000));\n  return {\n    json: {\n      kind: 'email_send',\n      payload: {\n        source_workflow: 'case-study-followup-sequence',\n        template_name: `case_study_email_${i + 1}`,\n        contact_id: webhook.contact_id,\n        contact_email: webhook.email,\n        contact_name: webhook.first_name,\n        scheduled_for: formatDateTimeAuSydney(scheduled),\n        template_payload: templatePayload\n      }\n    }\n  };\n});"
+      },
+      "id": "11111111-aaaa-bbbb-cccc-000000000002",
+      "name": "Build Email Tasks",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.task_queue (kind, payload) VALUES ($1, $2::jsonb) RETURNING id, kind, status, created_at;",
+        "options": {
+          "queryReplacement": "={{ $json.kind }},={{ JSON.stringify($json.payload) }}"
+        }
+      },
+      "id": "11111111-aaaa-bbbb-cccc-000000000003",
+      "name": "Insert Task Queue (tos_runtime)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        680,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME_postgres-tos-runtime-writer",
+          "name": "postgres-tos-runtime-writer"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Build Email Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Email Tasks": {
+      "main": [
+        [
+          {
+            "node": "Insert Task Queue (tos_runtime)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "staticData": null,
+  "meta": null,
+  "pinData": {},
+  "tags": []
+}

@@ -1,0 +1,583 @@
+{
+  "name": "[TrendAI] - Form Intake - Lead Capture (v2)",
+  "description": null,
+  "active": false,
+  "nodes": [
+    {
+      "id": "24b7e735-17e7-430a-8645-9561952edde0",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "form-intake/trendai-lead",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "f4b3e1ea-a86d-4200-a4f3-872406ad3348",
+      "name": "Prepare",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        460,
+        300
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "1",
+              "name": "form_slug",
+              "value": "trendai-lead",
+              "type": "string"
+            },
+            {
+              "id": "2",
+              "name": "venture",
+              "value": "trendai",
+              "type": "string"
+            },
+            {
+              "id": "3",
+              "name": "firstname",
+              "value": "={{ (($json.body && $json.body.name) || '').trim().split(/\\s+/)[0] || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "4",
+              "name": "lastname",
+              "value": "={{ (($json.body && $json.body.name) || '').trim().split(/\\s+/).slice(1).join(' ') }}",
+              "type": "string"
+            },
+            {
+              "id": "5",
+              "name": "email",
+              "value": "={{ ($json.body && $json.body.email) || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "6",
+              "name": "company",
+              "value": "={{ ($json.body && $json.body.company) || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "7",
+              "name": "service",
+              "value": "={{ ($json.body && $json.body.service) || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "8",
+              "name": "message",
+              "value": "={{ ($json.body && $json.body.message) || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "9",
+              "name": "source_ip",
+              "value": "={{ ($json.headers && ($json.headers['cf-connecting-ip'] || $json.headers['x-forwarded-for'])) || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "10",
+              "name": "user_agent",
+              "value": "={{ ($json.headers && $json.headers['user-agent']) || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "11",
+              "name": "payload",
+              "value": "={{ $json.body || {} }}",
+              "type": "object"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "c2733e23-6148-4ee3-8488-f39e5d11c0dc",
+      "name": "Insert Submission",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        680,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.submissions (form_slug, venture, payload, source_ip, user_agent) VALUES ('{{ ($json.form_slug || '').replace(/'/g, \"''\") }}', '{{ ($json.venture || '').replace(/'/g, \"''\") }}', '{{ JSON.stringify($json.payload || {}).replace(/'/g, \"''\") }}'::jsonb, NULLIF('{{ ($json.source_ip || '').replace(/'/g, \"''\") }}','')::inet, NULLIF('{{ ($json.user_agent || '').replace(/'/g, \"''\") }}','')) RETURNING id, received_at;",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME_postgres-form-intake-writer",
+          "name": "postgres-form-intake-writer"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "f12911d6-45ae-4d73-ab23-2f6575d56328",
+      "name": "Ack 200",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        900,
+        200
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: true, id: $('Insert Submission').item.json.id } }}",
+        "options": {
+          "responseCode": 200
+        }
+      }
+    },
+    {
+      "id": "b4f0f6bb-a3a6-4a37-a3ae-bf971c325cc8",
+      "name": "Brevo Alert (INSERT fail)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        900,
+        460
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.brevo.com/v3/smtp/email",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ sender: { name: 'TrendAI Pipeline', email: 'info@example-tenant.com' }, to: [{ email: 'ops@example-tenant.com', name: 'TOS Ops' }], subject: '[ALERT] TrendAI Lead Capture â€” postgres INSERT failed', htmlContent: '<h2>Form-intake pipeline alert</h2><p><strong>Form:</strong> trendai-lead</p><p><strong>Postgres INSERT failed.</strong> Submission was NOT persisted. Payload below is the only record.</p><h3>Payload</h3><pre>' + JSON.stringify($('Prepare').item.json.payload, null, 2) + '</pre><h3>Headers</h3><pre>ip=' + ($('Prepare').item.json.source_ip || '') + '\\nua=' + ($('Prepare').item.json.user_agent || '') + '</pre><h3>Error</h3><pre>' + JSON.stringify($json.error || $json, null, 2) + '</pre>' }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_ME_brevo-trendai-api",
+          "name": "brevo-trendai-api"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "13178f76-4e76-4a5b-aa7d-f3eeb69460aa",
+      "name": "Reject 500",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1120,
+        460
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: false, error: 'pipeline_unavailable' } }}",
+        "options": {
+          "responseCode": 500
+        }
+      }
+    },
+    {
+      "id": "eab51f1e-e8ab-406a-9abd-8eb0d42f3c2b",
+      "name": "HubSpot Upsert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1120,
+        200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.hubapi.com/crm/v3/objects/contacts/batch/upsert",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  inputs: [{\n    idProperty: 'email',\n    id: $('Prepare').item.json.email,\n    properties: Object.assign(\n      {\n        email: $('Prepare').item.json.email,\n        firstname: $('Prepare').item.json.firstname,\n        lastname: $('Prepare').item.json.lastname,\n        message: $('Prepare').item.json.message,\n        lead_service: $('Prepare').item.json.service,\n        lead_source: 'example-tenant.com/contact'\n      },\n      $('Prepare').item.json.company ? { company: $('Prepare').item.json.company } : {}\n    )\n  }]\n}) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_ME_hubspot-trendai-token",
+          "name": "hubspot-trendai-token"
+        }
+      },
+      "onError": "continueErrorOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "id": "1b929ac8-fbc8-48eb-8452-39eb2396730c",
+      "name": "Update HubSpot OK",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1340,
+        100
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE public.submissions SET hubspot_contact_id='{{ (($json.results && $json.results[0] && $json.results[0].id) || '').replace(/'/g, \"''\") }}', hubspot_synced_at=now(), last_attempt_at=now() WHERE id={{ $('Insert Submission').item.json.id }};",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME_postgres-form-intake-writer",
+          "name": "postgres-form-intake-writer"
+        }
+      }
+    },
+    {
+      "id": "4a83ae99-89bc-4508-b611-588258fda5b0",
+      "name": "Update HubSpot Error",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1340,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE public.submissions SET hubspot_error='{{ JSON.stringify($json.error || $json).substring(0, 2000).replace(/'/g, \"''\") }}', last_attempt_at=now(), attempt_count=attempt_count+1, next_retry_at=now()+interval '5 minutes' WHERE id={{ $('Insert Submission').item.json.id }};",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME_postgres-form-intake-writer",
+          "name": "postgres-form-intake-writer"
+        }
+      }
+    },
+    {
+      "id": "730f3343-7e60-4f00-a677-6e817f436e75",
+      "name": "Client Confirm Email",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1560,
+        200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.brevo.com/v3/smtp/email",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  sender: { name: 'TrendAI', email: 'info@example-tenant.com' },\n  to: [{ email: $('Prepare').item.json.email, name: ($('Prepare').item.json.firstname + ' ' + $('Prepare').item.json.lastname).trim() }],\n  subject: 'Thanks for reaching out to TrendAI',\n  htmlContent: '<p>Hi ' + ($('Prepare').item.json.firstname || 'there') + ',</p><p>Thanks for getting in touch with TrendAI. We have received your message and someone from our team will reply within one business day.</p><p><strong>Your enquiry:</strong></p><ul><li><strong>Service:</strong> ' + ($('Prepare').item.json.service || 'Not specified') + '</li>' + ($('Prepare').item.json.company ? '<li><strong>Company:</strong> ' + $('Prepare').item.json.company + '</li>' : '') + '</ul><p>If anything urgent comes up before then, just reply to this email â€” it will come straight back to us.</p><p>Best regards,<br>The TrendAI Team<br><a href=\\\"https://example-tenant.com\\\">example-tenant.com</a></p>'\n}) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_ME_brevo-trendai-api",
+          "name": "brevo-trendai-api"
+        }
+      },
+      "onError": "continueErrorOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "id": "9a5122f1-fae6-4a7c-a1e6-4ce0b49290b4",
+      "name": "Update Email OK",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1780,
+        100
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE public.submissions SET client_email_sent_at=now() WHERE id={{ $('Insert Submission').item.json.id }};",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME_postgres-form-intake-writer",
+          "name": "postgres-form-intake-writer"
+        }
+      }
+    },
+    {
+      "id": "8df3c776-f067-480c-b150-9070d83772e0",
+      "name": "Update Email Error",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1780,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE public.submissions SET client_email_error='{{ JSON.stringify($json.error || $json).substring(0, 2000).replace(/'/g, \"''\") }}', last_attempt_at=now(), attempt_count=attempt_count+1, next_retry_at=now()+interval '5 minutes' WHERE id={{ $('Insert Submission').item.json.id }};",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME_postgres-form-intake-writer",
+          "name": "postgres-form-intake-writer"
+        }
+      }
+    },
+    {
+      "id": "0edb3d7c-7bbe-4dd8-88fb-66028dae1dbf",
+      "name": "Mark Completed",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2000,
+        100
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE public.submissions SET status='completed' WHERE id={{ $('Insert Submission').item.json.id }} AND hubspot_synced_at IS NOT NULL AND client_email_sent_at IS NOT NULL;",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME_postgres-form-intake-writer",
+          "name": "postgres-form-intake-writer"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "probe-cond-1",
+              "leftValue": "={{ $('Webhook').item.json.body.__probe__ }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1100,
+        200
+      ],
+      "id": "probe-check-gdiVgzQG",
+      "name": "Probe Check"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE public.submissions SET status='completed' WHERE id={{ $('Insert Submission').item.json.id }};",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1320,
+        100
+      ],
+      "id": "mark-probe-gdiVgzQG",
+      "name": "Mark Probe Completed",
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME_postgres-form-intake-writer",
+          "name": "postgres-form-intake-writer"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Prepare",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare": {
+      "main": [
+        [
+          {
+            "node": "Insert Submission",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Submission": {
+      "main": [
+        [
+          {
+            "node": "Ack 200",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Brevo Alert (INSERT fail)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ack 200": {
+      "main": [
+        [
+          {
+            "node": "Probe Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Brevo Alert (INSERT fail)": {
+      "main": [
+        [
+          {
+            "node": "Reject 500",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HubSpot Upsert": {
+      "main": [
+        [
+          {
+            "node": "Update HubSpot OK",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Update HubSpot Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update HubSpot OK": {
+      "main": [
+        [
+          {
+            "node": "Client Confirm Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update HubSpot Error": {
+      "main": [
+        [
+          {
+            "node": "Client Confirm Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Client Confirm Email": {
+      "main": [
+        [
+          {
+            "node": "Update Email OK",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Update Email Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Email OK": {
+      "main": [
+        [
+          {
+            "node": "Mark Completed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Probe Check": {
+      "main": [
+        [
+          {
+            "node": "Mark Probe Completed",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "HubSpot Upsert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "staticData": null,
+  "meta": null,
+  "pinData": {},
+  "tags": []
+}

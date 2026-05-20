@@ -1,0 +1,67 @@
+{
+  "name": "[TrendAI] - TrendAI - OpenClaw Crash Alert",
+  "description": null,
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "05b145a5-8aaa-449d-bed9-bbb07cae4aeb",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "1dfa0d53-a501-4895-8baa-c5744975e510",
+      "name": "Receive Crash Event"
+    },
+    {
+      "parameters": {
+        "sendTo": "ops@example-tenant.com",
+        "subject": "🚨 [TrendAI] OpenClaw Gateway Crashed — Tristan-Yoga",
+        "emailType": "text",
+        "message": "=Hi Tai,\n\nThis is an automated alert from your TrendAI infrastructure.\n\nSERVICE ALERT — OPENCLAW GATEWAY\n─────────────────────────────────\nHost:     {{ $json.body.host }}\nService:  {{ $json.body.service }}\nEvent:    {{ $json.body.event }}\nTime:     {{ $json.body.time }}\nMessage:  {{ $json.body.message }}\nAction:   Auto-restart initiated\n\nThe OpenClaw gateway process crashed unexpectedly. Systemd has automatically attempted to restart the service.\n\nWHAT TO DO\n─────────────────────────────────\n1. Check service status:\n   journalctl --user -u openclaw-gateway.service -n 50\n\n2. If still down, restart manually:\n   systemctl --user restart openclaw-gateway.service\n\n3. If issues persist, check system resources:\n   free -h && df -h\n\n─────────────────────────────────\nTrendAI Infrastructure Monitoring\nAutomated alert — do not reply to this email",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        224,
+        0
+      ],
+      "id": "59b58ae6-082d-440f-b05e-70fa61013e4e",
+      "name": "Send Crash Alert",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "REPLACE_ME_gmail-account",
+          "name": "Gmail account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Receive Crash Event": {
+      "main": [
+        [
+          {
+            "node": "Send Crash Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "staticData": null,
+  "meta": {},
+  "pinData": {},
+  "tags": []
+}

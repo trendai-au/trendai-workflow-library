@@ -1,0 +1,118 @@
+{
+  "name": "[TrendAI] - Content Idea Enqueue (v1)",
+  "description": null,
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "content-idea-enqueue",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "55555555-aaaa-bbbb-cccc-000000000001",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.item.json;\nconst body = raw.body || raw;\nconst venture = (body.venture || '').toLowerCase();\nconst topic = body.topic || '';\nif (!['trendai','happyhome','maxlearn'].includes(venture)) {\n  throw new Error(`Invalid venture: '${venture}' — must be one of trendai/happyhome/maxlearn`);\n}\nif (!topic) {\n  throw new Error('topic is required');\n}\nreturn { json: {\n  kind: 'content_idea_draft',\n  payload: {\n    venture,\n    topic,\n    enqueued_at: new Date().toISOString(),\n    source: 'webhook'\n  }\n}};"
+      },
+      "id": "55555555-aaaa-bbbb-cccc-000000000002",
+      "name": "Validate + Build",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.task_queue (kind, payload) VALUES ($1, $2::jsonb) RETURNING id, kind, status, created_at;",
+        "options": {
+          "queryReplacement": "={{ $json.kind }},={{ JSON.stringify($json.payload) }}"
+        }
+      },
+      "id": "55555555-aaaa-bbbb-cccc-000000000003",
+      "name": "Insert Task Queue (tos_runtime)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        680,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME_postgres-tos-runtime-writer",
+          "name": "postgres-tos-runtime-writer"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: true, queue_id: $json.id, status: $json.status }) }}",
+        "options": {}
+      },
+      "id": "55555555-aaaa-bbbb-cccc-000000000004",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        900,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate + Build",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate + Build": {
+      "main": [
+        [
+          {
+            "node": "Insert Task Queue (tos_runtime)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Task Queue (tos_runtime)": {
+      "main": [
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "staticData": null,
+  "meta": null,
+  "pinData": {},
+  "tags": []
+}

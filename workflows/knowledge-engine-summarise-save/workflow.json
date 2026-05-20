@@ -1,0 +1,275 @@
+{
+  "name": "[TrendAI] - Knowledge Engine - Inbox Summarise & Save (sub)",
+  "description": null,
+  "active": false,
+  "nodes": [
+    {
+      "id": "6bfebc26-6694-464d-8caa-4a694bd94c80",
+      "name": "When called by another workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        200,
+        300
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "a6514a55-ffb3-4f1c-be71-8e50bc6d01c3",
+      "name": "Build Gemini Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const i = $input.first().json;\n\nconst prompt = `Please summarize this content.\n\nSource: ${i.source_type || 'unknown'}\nTitle: ${i.title || ''}\n${i.author_or_source ? 'Author/Channel: ' + i.author_or_source + '\\n' : ''}\n${i.source_url ? 'URL: ' + i.source_url + '\\n' : ''}\n\nContent:\n${i.raw_content || ''}\n\nIMPORTANT: Write the summary in the SAME LANGUAGE as the content. Do not translate to English.\n\nProvide a concise summary. Format your response exactly as follows:\n\n**TLDR**\n[Single paragraph, 3-4 sentences capturing the main idea]\n\n**Summary**\n[Detailed 3-5 paragraph summary capturing key points, arguments, and conclusions]\n\n**Tags**\n[3-5 short topic tags on a single line, comma-separated, lowercase, hyphenated for multi-word tags. Examples: ai-safety, llm-evaluation, product-strategy, government-policy. Tags MUST always be in English (translate from the source language if needed) so the tag set stays uniform across items.]\n\nWrite the TLDR and Summary in clear, informative prose. No bullet points.\n`;\n\nreturn [{ json: { ...i, _gemini_prompt: prompt } }];\n"
+      }
+    },
+    {
+      "id": "db816cc6-b925-42fb-9ae9-4497f137d3f2",
+      "name": "Message a model",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        640,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googlePalmApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ contents: [{ parts: [{ text: $json._gemini_prompt }] }], generationConfig: { temperature: 0.2, maxOutputTokens: 2048, thinkingConfig: { thinkingBudget: 0 } } }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "googlePalmApi": {
+          "id": "REPLACE_ME_gemini-key-2-5-flash-openclaw",
+          "name": "Gemini Key - 2.5 Flash (OpenClaw)"
+        }
+      },
+      "notes": "Switched 2026-05-08 from s07 fastapi qwen2.5:7b to Gemini 2.5 Flash direct REST. CRITICAL: thinkingConfig.thinkingBudget=0 — without it, Gemini 2.5 Flash burns most of maxOutputTokens on internal thinking, returning a truncated summary (first attempt at 600 tokens left only 22 visible tokens after 573 thinking tokens). maxOutputTokens raised 600->2048 for headroom. Compose Inbox Row already handles candidates[0].content.parts[0].text.",
+      "notesInFlow": false,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "id": "1cf20046-1ffa-4c45-b6a8-39d587f3547c",
+      "name": "Compose Inbox Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        860,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const input = $('When called by another workflow').first().json;\nconst llm = $input.first().json;\n\n// Multiple LLM response shapes covered:\n//   * Gemini direct REST (current)        — candidates[0].content.parts[0].text\n//   * Legacy googleGemini langchain node  — content.parts[0].text\n//   * OpenAI / s07 FastAPI shape          — choices[0].message.content\nconst summaryRaw =\n  llm?.candidates?.[0]?.content?.parts?.[0]?.text ??\n  llm?.choices?.[0]?.message?.content ??\n  llm?.message?.content ??\n  llm?.content?.parts?.[0]?.text;\nif (!summaryRaw) { throw new Error('MISSING: LLM returned no summary text'); }\n\nlet summary = summaryRaw;\nlet tags = [];\nconst tagMatch = summary.match(/\\*\\*Tags\\*\\*\\s*\\n([\\s\\S]*?)\\s*$/);\nif (tagMatch) {\n  const line = tagMatch[1].split('\\n')[0];\n  tags = line\n    .split(/[,;]/)\n    .map(s => s.trim().toLowerCase().replace(/^[#\\-\\s]+|[\\.\\s]+$/g, '').replace(/\\s+/g, '-'))\n    .filter(s => s && s.length <= 40)\n    .slice(0, 5);\n  summary = summary.slice(0, tagMatch.index).replace(/\\s+$/, '');\n}\n\nreturn [{\n  json: {\n    source_type:      input.source_type,\n    external_id:      input.external_id,\n    source_url:       input.source_url || null,\n    title:            input.title,\n    author_or_source: input.author_or_source || null,\n    published_at:     input.published_at || null,\n    raw_content:      input.raw_content || null,\n    content_md:       input.content_md || '',\n    ai_summary:       summary,\n    tags:             tags,\n    thumbnail_url:    input.thumbnail_url || null,\n    source_metadata:  input.source_metadata || {},\n    shared_at:        input.shared_at || null\n  }\n}];\n"
+      }
+    },
+    {
+      "id": "0e2f55f5-f5ab-420d-a3bc-4541f491af83",
+      "name": "Save to Supabase",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1080,
+        300
+      ],
+      "parameters": {
+        "tableId": "knowledge_items",
+        "dataToSend": "autoMapInputData"
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "REPLACE_ME_supabase-account",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "id": "ef67b18c-07cb-4a72-a6fc-d316a754479c",
+      "name": "Prepare Success Log",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1300,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const row = $('Compose Inbox Row').first().json;\nreturn [{\n  json: {\n    video_id:       row.external_id + '-' + Date.now(),\n    process_status: 'success',\n    error_type:     null,\n    notes:          `[${row.source_type}] ${row.title}`\n  }\n}];"
+      }
+    },
+    {
+      "id": "d2ed47f3-d99c-47ec-8c5a-cd9e92a461de",
+      "name": "Log Run",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1520,
+        300
+      ],
+      "parameters": {
+        "tableId": "runs",
+        "dataToSend": "autoMapInputData"
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "REPLACE_ME_supabase-account",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "id": "f09348c5-c91d-432a-914a-40db6868bcc4",
+      "name": "Prepare Messages for Discord",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1740,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const row = $('Compose Inbox Row').first().json;\nconst input = $('When called by another workflow').first().json;\n\nconst summary = row.ai_summary || 'No summary available';\nconst safeLimit = 1900;\nconst chunks = [];\n\nlet header = `Saved! **${row.title}**`;\nif (row.author_or_source) header += ` by **${row.author_or_source}**`;\nif (row.source_type === 'youtube' && input.source_metadata) {\n  const sm = input.source_metadata;\n  if (sm.duration) {\n    header += ` | ${Math.floor(sm.duration / 60)}m ${sm.duration % 60}s`;\n  }\n  if (sm.view_count) header += ` | ${sm.view_count} views`;\n}\nheader += ` ---\\n\\n`;\n\nlet remaining = summary;\nwhile (remaining.length > 0) {\n  const isFirst = chunks.length === 0;\n  const max = isFirst ? safeLimit - header.length : safeLimit;\n  if (remaining.length <= max) {\n    chunks.push({ json: { chunk: (isFirst ? header : '') + remaining, channel_id: input.discord_channel_id } });\n    break;\n  }\n  let split = remaining.lastIndexOf(' ', max);\n  if (split === -1) split = max;\n  let text = remaining.substring(0, split);\n  if (isFirst) text = header + text;\n  chunks.push({ json: { chunk: text, channel_id: input.discord_channel_id } });\n  remaining = remaining.substring(split).trim();\n}\nreturn chunks;"
+      }
+    },
+    {
+      "id": "6b980428-0536-4cad-a2b0-3ebbd4585297",
+      "name": "Discord Reply",
+      "type": "n8n-nodes-base.discord",
+      "typeVersion": 2,
+      "position": [
+        1960,
+        300
+      ],
+      "parameters": {
+        "resource": "message",
+        "content": "={{ $json.chunk }}",
+        "guildId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "1475744721321201788",
+          "cachedResultUrl": "https://discord.com/channels/1475744721321201788",
+          "cachedResultName": "TrendAI Ops"
+        },
+        "channelId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $json.channel_id }}"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "discordBotApi": {
+          "id": "REPLACE_ME_youtube-extractor-discord-bot-account",
+          "name": "youtube-extractor Discord Bot account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "When called by another workflow": {
+      "main": [
+        [
+          {
+            "node": "Build Gemini Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Gemini Prompt": {
+      "main": [
+        [
+          {
+            "node": "Message a model",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Message a model": {
+      "main": [
+        [
+          {
+            "node": "Compose Inbox Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compose Inbox Row": {
+      "main": [
+        [
+          {
+            "node": "Save to Supabase",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save to Supabase": {
+      "main": [
+        [
+          {
+            "node": "Prepare Success Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Success Log": {
+      "main": [
+        [
+          {
+            "node": "Log Run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Run": {
+      "main": [
+        [
+          {
+            "node": "Prepare Messages for Discord",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Messages for Discord": {
+      "main": [
+        [
+          {
+            "node": "Discord Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "staticData": null,
+  "meta": null,
+  "pinData": {},
+  "tags": []
+}
