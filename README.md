@@ -21,6 +21,7 @@ your own n8n instance.
 | [case-study-followup](workflows/case-study-followup/) | 3 | Scheduled-task enqueue: `webhook → queue row with scheduled_for` | Postgres |
 | [openclaw-crash-alert](workflows/openclaw-crash-alert/) | 2 | Minimal alerting template — webhook → email (the bottom of an alert stack) | Gmail OAuth2 |
 | [customer-support-chatbot](workflows/customer-support-chatbot/) | 15 | Web-widget chatbot: Gemini 2.5 Flash intent routing → Q&A / order-lookup / ticket-create / human-handoff branches | Google PaLM API (Gemini), Postgres |
+| [crm-data-enrichment](workflows/crm-data-enrichment/) | 12 | Google Sheets row → Gemini 2.5 Flash company/role/ICP enrichment → ICP-banded UPSERT to Postgres + output sheet + Discord hot-lead ping | Google Sheets Trigger OAuth2, Google Sheets OAuth2, Google PaLM API (Gemini), Postgres |
 
 ## Importing into your n8n
 

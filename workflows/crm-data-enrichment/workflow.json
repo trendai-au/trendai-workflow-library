@@ -1,0 +1,329 @@
+{
+  "name": "[TrendAI] - CRM Data Enrichment (Sheets in, ICP-scored out)",
+  "description": null,
+  "active": false,
+  "nodes": [
+    {
+      "id": "tr-0001",
+      "name": "Google Sheets Trigger - New Contact",
+      "type": "n8n-nodes-base.googleSheetsTrigger",
+      "typeVersion": 1,
+      "position": [200, 400],
+      "parameters": {
+        "pollTimes": {
+          "item": [{ "mode": "everyMinute" }]
+        },
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_ME_input_sheet_id",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "REPLACE_ME_input_sheet_gid",
+          "mode": "id"
+        },
+        "event": "rowAdded",
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsTriggerOAuth2Api": {
+          "id": "REPLACE_ME_gsheets-trigger-contacts-input",
+          "name": "gsheets-trigger-contacts-input"
+        }
+      }
+    },
+    {
+      "id": "cd-0001",
+      "name": "Validate + Normalise Contact",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 400],
+      "parameters": {
+        "jsCode": "const row = $input.first().json || {};\n\nconst raw = {\n  email: String(row.email || '').trim().toLowerCase(),\n  name: String(row.name || '').trim(),\n  company: String(row.company || '').trim(),\n  role: String(row.role || '').trim(),\n  source: String(row.source || '').trim(),\n  row_number: row.row_number\n};\n\nif (!raw.email || !raw.email.includes('@')) {\n  // Surface a structured skip instead of throwing — downstream IF could drop these,\n  // but for the template we let the model see a sparse record and score it low.\n  return [{ json: { ...raw, _validation: 'missing_or_invalid_email', _ok: false } }];\n}\n\nif (!raw.company) {\n  // Best-effort: derive company guess from email domain (skip free webmail).\n  const domain = raw.email.split('@')[1] || '';\n  const free = ['gmail.com','outlook.com','yahoo.com','hotmail.com','icloud.com','proton.me','protonmail.com'];\n  if (domain && !free.includes(domain)) {\n    raw.company = domain.replace(/\\.[a-z.]+$/, '').replace(/[-_]/g,' ');\n    raw._company_inferred_from = domain;\n  }\n}\n\nreturn [{ json: { ...raw, _ok: true } }];\n"
+      }
+    },
+    {
+      "id": "cd-0002",
+      "name": "Build Gemini Enrichment Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [640, 400],
+      "parameters": {
+        "jsCode": "const c = $input.first().json;\n\nconst systemPrompt = `You are a B2B sales-research analyst. Given a contact record (name + email + company + optional role + source), you produce a structured enrichment record using only your general knowledge — do not fabricate specific facts that you don't have high confidence in.\n\nReturn ONLY a single JSON object, no prose, no code fences. Shape:\n{\n  \"company\": {\n    \"name\": \"<canonical company name or best inference, empty string if unknown>\",\n    \"industry\": \"<one of: SaaS|Ecommerce|Marketing|Finance|Healthcare|Education|Manufacturing|Construction|Hospitality|RealEstate|Legal|Logistics|NotForProfit|Other|Unknown>\",\n    \"size_band\": \"<one of: solo|2-10|11-50|51-200|201-1000|1000+|unknown>\",\n    \"hq_country\": \"<ISO country code or empty>\",\n    \"business_model\": \"<one of: B2B|B2C|B2B2C|Marketplace|Unknown>\",\n    \"signals\": [\"<short signal 1>\", \"<short signal 2>\", \"<short signal 3>\"]\n  },\n  \"contact\": {\n    \"role_seniority\": \"<one of: ic|senior_ic|manager|director|vp|c_level|founder|unknown>\",\n    \"role_function\": \"<one of: engineering|product|marketing|sales|ops|finance|hr|exec|other|unknown>\"\n  },\n  \"outreach\": {\n    \"hook\": \"<one short sentence — a plausible, specific outreach angle>\",\n    \"confidence\": \"<low|medium|high>\"\n  },\n  \"confidence_notes\": \"<one sentence on what you're confident vs guessing about>\"\n}\n\nRules:\n- If you genuinely don't know a field, use \"unknown\" / empty string / empty array — never invent.\n- Signals are short factual phrases (\"public SaaS company\", \"YC-backed\", \"AU-based marketplace\") — not invented news.\n- The hook should be plausible and specific to the inferred profile, not generic (\"hope you're well\" is a fail).`;\n\nconst userPrompt = `Contact record:\\n- name: ${c.name || '(unknown)'}\\n- email: ${c.email}\\n- company: ${c.company || '(unknown)'}\\n- role: ${c.role || '(unknown)'}\\n- source: ${c.source || '(unknown)'}\\n\\nEnrich + return JSON only.`;\n\nconst fullPrompt = `${systemPrompt}\\n\\n---\\n\\n${userPrompt}`;\n\nreturn [{ json: { ...c, _gemini_prompt: fullPrompt } }];\n"
+      }
+    },
+    {
+      "id": "ht-0001",
+      "name": "Call Gemini 2.5 Flash",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [860, 400],
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googlePalmApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ contents: [{ parts: [{ text: $json._gemini_prompt }] }], generationConfig: { temperature: 0.2, maxOutputTokens: 2048, responseMimeType: 'application/json', thinkingConfig: { thinkingBudget: 0 } } }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "googlePalmApi": {
+          "id": "REPLACE_ME_gemini-2-5-flash",
+          "name": "gemini-2-5-flash"
+        }
+      }
+    },
+    {
+      "id": "cd-0003",
+      "name": "Parse Gemini Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1080, 400],
+      "parameters": {
+        "jsCode": "const gemini = $input.first().json;\nconst raw = gemini?.candidates?.[0]?.content?.parts?.[0]?.text || '{}';\n\nlet enrichment;\ntry {\n  enrichment = JSON.parse(raw);\n} catch (e) {\n  enrichment = {\n    company: { name: '', industry: 'Unknown', size_band: 'unknown', hq_country: '', business_model: 'Unknown', signals: [] },\n    contact: { role_seniority: 'unknown', role_function: 'unknown' },\n    outreach: { hook: '', confidence: 'low' },\n    confidence_notes: 'Model returned non-JSON; defaults applied.'\n  };\n}\n\n// Defensive defaults so downstream ICP scorer never NPEs.\nenrichment.company = enrichment.company || {};\nenrichment.contact = enrichment.contact || {};\nenrichment.outreach = enrichment.outreach || {};\nenrichment.company.signals = Array.isArray(enrichment.company.signals) ? enrichment.company.signals : [];\n\nconst prev = $('Build Gemini Enrichment Prompt').item.json;\n\nreturn [{ json: {\n  email: prev.email,\n  name: prev.name,\n  company_input: prev.company,\n  role_input: prev.role,\n  source: prev.source,\n  row_number: prev.row_number,\n  enrichment\n} }];\n"
+      }
+    },
+    {
+      "id": "pg-0001",
+      "name": "Load ICP Profiles",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1300, 400],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_agg(t) AS icps FROM (SELECT id, name, target_industries, target_size_bands, target_role_seniorities, target_business_models, weight FROM public.icp_profiles WHERE is_active = true ORDER BY weight DESC) t;",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME_postgres-crm-enrichment-rw",
+          "name": "postgres-crm-enrichment-rw"
+        }
+      }
+    },
+    {
+      "id": "cd-0004",
+      "name": "Score Against ICPs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1520, 400],
+      "parameters": {
+        "jsCode": "const icpRow = $input.first().json;\nconst icps = (icpRow && icpRow.icps) || [];\nconst prev = $('Parse Gemini Output').item.json;\nconst e = prev.enrichment;\n\n// 4-axis match: industry / size_band / role_seniority / business_model.\n// Each axis worth 25 points. ICP-level weight scales the final score.\nfunction matchAxis(arr, val) {\n  if (!Array.isArray(arr) || arr.length === 0) return true;   // unconstrained = match\n  if (!val || val === 'unknown' || val === 'Unknown') return false;\n  return arr.includes(val);\n}\n\nlet best = { icp_id: null, icp_name: 'no-icp-match', score: 0 };\nfor (const icp of icps) {\n  const axes = [\n    matchAxis(icp.target_industries, e.company.industry),\n    matchAxis(icp.target_size_bands, e.company.size_band),\n    matchAxis(icp.target_role_seniorities, e.contact.role_seniority),\n    matchAxis(icp.target_business_models, e.company.business_model)\n  ];\n  const hits = axes.filter(Boolean).length;\n  const base = hits * 25;\n  const weighted = Math.round(base * (Number(icp.weight) || 1.0));\n  const score = Math.min(100, weighted);\n  if (score > best.score) best = { icp_id: icp.id, icp_name: icp.name, score };\n}\n\n// Band thresholds. Tune in the icp_profiles seed comment if you re-baseline.\nlet band;\nif (best.score >= 75) band = 'hot';\nelse if (best.score >= 40) band = 'warm';\nelse band = 'cold';\n\nreturn [{ json: { ...prev, icp_match: best, score: best.score, band } }];\n"
+      }
+    },
+    {
+      "id": "pg-0002",
+      "name": "Insert contacts_enriched",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1740, 400],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.contacts_enriched (email, name, company_input, role_input, source, company_name, industry, size_band, hq_country, business_model, signals, role_seniority, role_function, outreach_hook, outreach_confidence, confidence_notes, icp_id, icp_name, icp_score, band) VALUES (NULLIF('{{ ($json.email || '').replace(/'/g, \"''\") }}',''), NULLIF('{{ ($json.name || '').replace(/'/g, \"''\") }}',''), NULLIF('{{ ($json.company_input || '').replace(/'/g, \"''\") }}',''), NULLIF('{{ ($json.role_input || '').replace(/'/g, \"''\") }}',''), NULLIF('{{ ($json.source || '').replace(/'/g, \"''\") }}',''), NULLIF('{{ ($json.enrichment.company.name || '').replace(/'/g, \"''\") }}',''), '{{ ($json.enrichment.company.industry || 'Unknown').replace(/'/g, \"''\") }}', '{{ ($json.enrichment.company.size_band || 'unknown').replace(/'/g, \"''\") }}', NULLIF('{{ ($json.enrichment.company.hq_country || '').replace(/'/g, \"''\") }}',''), '{{ ($json.enrichment.company.business_model || 'Unknown').replace(/'/g, \"''\") }}', '{{ JSON.stringify($json.enrichment.company.signals || []).replace(/'/g, \"''\") }}'::jsonb, '{{ ($json.enrichment.contact.role_seniority || 'unknown').replace(/'/g, \"''\") }}', '{{ ($json.enrichment.contact.role_function || 'unknown').replace(/'/g, \"''\") }}', NULLIF('{{ ($json.enrichment.outreach.hook || '').replace(/'/g, \"''\") }}',''), '{{ ($json.enrichment.outreach.confidence || 'low').replace(/'/g, \"''\") }}', NULLIF('{{ ($json.enrichment.confidence_notes || '').replace(/'/g, \"''\") }}',''), {{ $json.icp_match.icp_id === null ? 'NULL' : $json.icp_match.icp_id }}, '{{ ($json.icp_match.icp_name || '').replace(/'/g, \"''\") }}', {{ $json.score }}, '{{ $json.band }}') ON CONFLICT (email) DO UPDATE SET name = EXCLUDED.name, company_name = EXCLUDED.company_name, industry = EXCLUDED.industry, size_band = EXCLUDED.size_band, hq_country = EXCLUDED.hq_country, business_model = EXCLUDED.business_model, signals = EXCLUDED.signals, role_seniority = EXCLUDED.role_seniority, role_function = EXCLUDED.role_function, outreach_hook = EXCLUDED.outreach_hook, outreach_confidence = EXCLUDED.outreach_confidence, confidence_notes = EXCLUDED.confidence_notes, icp_id = EXCLUDED.icp_id, icp_name = EXCLUDED.icp_name, icp_score = EXCLUDED.icp_score, band = EXCLUDED.band, enriched_at = now() RETURNING id, email, icp_score, band;",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME_postgres-crm-enrichment-rw",
+          "name": "postgres-crm-enrichment-rw"
+        }
+      }
+    },
+    {
+      "id": "gs-0001",
+      "name": "Write to Output Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [1960, 400],
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_ME_output_sheet_id",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "REPLACE_ME_output_sheet_gid",
+          "mode": "id"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": ["email"],
+          "value": {
+            "email": "={{ $('Score Against ICPs').item.json.email }}",
+            "name": "={{ $('Score Against ICPs').item.json.name }}",
+            "company_name": "={{ $('Score Against ICPs').item.json.enrichment.company.name }}",
+            "industry": "={{ $('Score Against ICPs').item.json.enrichment.company.industry }}",
+            "size_band": "={{ $('Score Against ICPs').item.json.enrichment.company.size_band }}",
+            "hq_country": "={{ $('Score Against ICPs').item.json.enrichment.company.hq_country }}",
+            "business_model": "={{ $('Score Against ICPs').item.json.enrichment.company.business_model }}",
+            "role_seniority": "={{ $('Score Against ICPs').item.json.enrichment.contact.role_seniority }}",
+            "role_function": "={{ $('Score Against ICPs').item.json.enrichment.contact.role_function }}",
+            "outreach_hook": "={{ $('Score Against ICPs').item.json.enrichment.outreach.hook }}",
+            "outreach_confidence": "={{ $('Score Against ICPs').item.json.enrichment.outreach.confidence }}",
+            "icp_name": "={{ $('Score Against ICPs').item.json.icp_match.icp_name }}",
+            "icp_score": "={{ $('Score Against ICPs').item.json.score }}",
+            "band": "={{ $('Score Against ICPs').item.json.band }}",
+            "enriched_at": "={{ $now.toISO() }}"
+          },
+          "schema": [
+            { "id": "email", "displayName": "email", "type": "string", "required": true, "canBeUsedToMatch": true },
+            { "id": "name", "displayName": "name", "type": "string" },
+            { "id": "company_name", "displayName": "company_name", "type": "string" },
+            { "id": "industry", "displayName": "industry", "type": "string" },
+            { "id": "size_band", "displayName": "size_band", "type": "string" },
+            { "id": "hq_country", "displayName": "hq_country", "type": "string" },
+            { "id": "business_model", "displayName": "business_model", "type": "string" },
+            { "id": "role_seniority", "displayName": "role_seniority", "type": "string" },
+            { "id": "role_function", "displayName": "role_function", "type": "string" },
+            { "id": "outreach_hook", "displayName": "outreach_hook", "type": "string" },
+            { "id": "outreach_confidence", "displayName": "outreach_confidence", "type": "string" },
+            { "id": "icp_name", "displayName": "icp_name", "type": "string" },
+            { "id": "icp_score", "displayName": "icp_score", "type": "number" },
+            { "id": "band", "displayName": "band", "type": "string" },
+            { "id": "enriched_at", "displayName": "enriched_at", "type": "string" }
+          ]
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_ME_gsheets-contacts-output",
+          "name": "gsheets-contacts-output"
+        }
+      }
+    },
+    {
+      "id": "sw-0001",
+      "name": "Route on Score Band",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [2180, 400],
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose", "version": 2 },
+                "conditions": [
+                  {
+                    "id": "rule-hot",
+                    "leftValue": "={{ $('Score Against ICPs').item.json.band }}",
+                    "rightValue": "hot",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose", "version": 2 },
+                "conditions": [
+                  {
+                    "id": "rule-warm",
+                    "leftValue": "={{ $('Score Against ICPs').item.json.band }}",
+                    "rightValue": "warm",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose", "version": 2 },
+                "conditions": [
+                  {
+                    "id": "rule-cold",
+                    "leftValue": "={{ $('Score Against ICPs').item.json.band }}",
+                    "rightValue": "cold",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": 2
+        }
+      }
+    },
+    {
+      "id": "ht-0002",
+      "name": "Notify Hot Lead - Discord",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2400, 280],
+      "parameters": {
+        "method": "POST",
+        "url": "REPLACE_ME_discord_webhook_url",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ content: `**Hot lead** — score ${$('Score Against ICPs').item.json.score} (${$('Score Against ICPs').item.json.icp_match.icp_name})\\nContact: ${$('Score Against ICPs').item.json.name || '(no name)'} <${$('Score Against ICPs').item.json.email}>\\nCompany: ${$('Score Against ICPs').item.json.enrichment.company.name || '(unknown)'} — ${$('Score Against ICPs').item.json.enrichment.company.industry} / ${$('Score Against ICPs').item.json.enrichment.company.size_band}\\nRole: ${$('Score Against ICPs').item.json.enrichment.contact.role_seniority} / ${$('Score Against ICPs').item.json.enrichment.contact.role_function}\\nHook: ${$('Score Against ICPs').item.json.enrichment.outreach.hook || '(none drafted)'}` }) }}",
+        "options": {}
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "mg-0001",
+      "name": "Merge Branches",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [2620, 400],
+      "parameters": {
+        "mode": "append",
+        "numberInputs": 3
+      }
+    }
+  ],
+  "connections": {
+    "Google Sheets Trigger - New Contact": {
+      "main": [[{ "node": "Validate + Normalise Contact", "type": "main", "index": 0 }]]
+    },
+    "Validate + Normalise Contact": {
+      "main": [[{ "node": "Build Gemini Enrichment Prompt", "type": "main", "index": 0 }]]
+    },
+    "Build Gemini Enrichment Prompt": {
+      "main": [[{ "node": "Call Gemini 2.5 Flash", "type": "main", "index": 0 }]]
+    },
+    "Call Gemini 2.5 Flash": {
+      "main": [[{ "node": "Parse Gemini Output", "type": "main", "index": 0 }]]
+    },
+    "Parse Gemini Output": {
+      "main": [[{ "node": "Load ICP Profiles", "type": "main", "index": 0 }]]
+    },
+    "Load ICP Profiles": {
+      "main": [[{ "node": "Score Against ICPs", "type": "main", "index": 0 }]]
+    },
+    "Score Against ICPs": {
+      "main": [[{ "node": "Insert contacts_enriched", "type": "main", "index": 0 }]]
+    },
+    "Insert contacts_enriched": {
+      "main": [[{ "node": "Write to Output Sheet", "type": "main", "index": 0 }]]
+    },
+    "Write to Output Sheet": {
+      "main": [[{ "node": "Route on Score Band", "type": "main", "index": 0 }]]
+    },
+    "Route on Score Band": {
+      "main": [
+        [{ "node": "Notify Hot Lead - Discord", "type": "main", "index": 0 }],
+        [{ "node": "Merge Branches", "type": "main", "index": 1 }],
+        [{ "node": "Merge Branches", "type": "main", "index": 2 }]
+      ]
+    },
+    "Notify Hot Lead - Discord": {
+      "main": [[{ "node": "Merge Branches", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": []
+}
