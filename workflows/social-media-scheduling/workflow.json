@@ -1,0 +1,367 @@
+{
+  "name": "[TrendAI] - Social Media Scheduling (Sheets queue → FB / LinkedIn / Discord)",
+  "description": null,
+  "active": false,
+  "nodes": [
+    {
+      "id": "cr-0001",
+      "name": "Schedule Trigger - Every Minute",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [200, 400],
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "minutes", "minutesInterval": 1 }]
+        }
+      }
+    },
+    {
+      "id": "gs-0001",
+      "name": "Read Sheet Rows",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [420, 400],
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_ME_queue_sheet_id",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "REPLACE_ME_queue_sheet_gid",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_ME_gsheets-posts-queue",
+          "name": "gsheets-posts-queue"
+        }
+      }
+    },
+    {
+      "id": "cd-0001",
+      "name": "Filter Queued + Due",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [640, 400],
+      "parameters": {
+        "jsCode": "const rows = $input.all().map(i => i.json);\nconst now = new Date();\nconst supported = new Set(['fb','li','discord']);\n\nconst due = rows.filter(r => {\n  const status = String(r.status || '').trim().toLowerCase();\n  const channel = String(r.channel || '').trim().toLowerCase();\n  const scheduleAt = r.schedule_at ? new Date(r.schedule_at) : null;\n  const dueNow = scheduleAt && !isNaN(scheduleAt) ? scheduleAt <= now : false;\n  return status === 'queued' && supported.has(channel) && dueNow;\n});\n\n// Normalise each row's fields for downstream uniformity.\nconst items = due.map(r => ({\n  json: {\n    post_id: String(r.post_id || '').trim(),\n    channel: String(r.channel || '').trim().toLowerCase(),\n    post_text: String(r.post_text || ''),\n    schedule_at: r.schedule_at,\n    rewrite_enabled: String(r.rewrite_enabled || '').toLowerCase() === 'true' || r.rewrite_enabled === true,\n    row_number: r.row_number\n  }\n}));\n\nreturn items;\n"
+      }
+    },
+    {
+      "id": "cd-0002",
+      "name": "Build Per-Channel Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [860, 400],
+      "parameters": {
+        "jsCode": "const row = $input.first().json;\n\n// Per-channel persona + length budget. Tune in this map to change the\n// rewrite voice without touching the prompt scaffolding below.\nconst personas = {\n  fb: {\n    name: 'Facebook Page (business audience)',\n    voice: 'conversational, accessible, slightly warmer than LinkedIn',\n    length_target: '80-200 words',\n    emoji_policy: '1-2 contextual emojis OK; never lead with one',\n    cta_policy: 'soft CTA at the end is OK; no hard sell',\n    formatting: 'short paragraphs, blank line between thoughts; no markdown'\n  },\n  li: {\n    name: 'LinkedIn Company Page (professional audience)',\n    voice: 'professional, insight-led, first-person plural',\n    length_target: '180-400 words',\n    emoji_policy: 'no emojis',\n    cta_policy: 'end with a single clear CTA or question to drive comments',\n    formatting: 'hook in first 2 lines (above-the-fold), short paragraphs, no markdown, line breaks for scanability'\n  },\n  discord: {\n    name: 'Discord channel announcement (community audience)',\n    voice: 'direct, casual, peer-to-peer',\n    length_target: '1-3 short sentences',\n    emoji_policy: '1 contextual emoji at the start is fine',\n    cta_policy: 'optional link; otherwise none',\n    formatting: 'Discord markdown supported (**bold**, *italic*, ` code `)'\n  }\n};\n\nconst persona = personas[row.channel] || personas.fb;\nconst sourceText = row.post_text;\n\nconst systemPrompt = `You are a social-media copy editor rewriting one source post for one specific channel. Your job is to keep the message identical but change the form so it fits the channel's audience and conventions.\n\nReturn ONLY a single JSON object, no prose, no code fences. Shape:\n{\n  \"rewritten_text\": \"<the rewritten post — channel-appropriate length and voice>\",\n  \"notes\": \"<one sentence on what you changed and why>\"\n}\n\nChannel: ${persona.name}\n- Voice: ${persona.voice}\n- Length target: ${persona.length_target}\n- Emoji policy: ${persona.emoji_policy}\n- CTA policy: ${persona.cta_policy}\n- Formatting: ${persona.formatting}\n\nRules:\n- Preserve the post's core message + any URLs or @mentions exactly.\n- Do not invent facts, numbers, names, or quotes that aren't in the source.\n- If the source is already channel-appropriate, return it nearly unchanged (do not over-edit).\n- Do not include hashtags unless they appear in the source.`;\n\nconst userPrompt = `Source post (channel-agnostic):\\n\"\"\"\\n${sourceText}\\n\"\"\"\\n\\nRewrite for ${persona.name}.`;\n\nconst fullPrompt = `${systemPrompt}\\n\\n---\\n\\n${userPrompt}`;\n\n// Default pass-through: if rewrite is disabled, _post_text_final == source.\nreturn [{ json: { ...row, _post_text_final: sourceText, _gemini_prompt: fullPrompt } }];\n"
+      }
+    },
+    {
+      "id": "sw-0001",
+      "name": "Switch - Rewrite Enabled?",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [1080, 400],
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose", "version": 2 },
+                "conditions": [
+                  {
+                    "id": "rule-rewrite-on",
+                    "leftValue": "={{ $json.rewrite_enabled }}",
+                    "rightValue": true,
+                    "operator": { "type": "boolean", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      }
+    },
+    {
+      "id": "ht-0001",
+      "name": "Call Gemini 2.5 Flash",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1300, 280],
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googlePalmApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ contents: [{ parts: [{ text: $json._gemini_prompt }] }], generationConfig: { temperature: 0.3, maxOutputTokens: 2048, responseMimeType: 'application/json', thinkingConfig: { thinkingBudget: 0 } } }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "googlePalmApi": {
+          "id": "REPLACE_ME_gemini-2-5-flash",
+          "name": "gemini-2-5-flash"
+        }
+      }
+    },
+    {
+      "id": "cd-0003",
+      "name": "Parse Gemini Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1520, 280],
+      "parameters": {
+        "jsCode": "const gemini = $input.first().json;\nconst raw = gemini?.candidates?.[0]?.content?.parts?.[0]?.text || '{}';\n\nlet parsed;\ntry {\n  parsed = JSON.parse(raw);\n} catch (e) {\n  parsed = { rewritten_text: '', notes: 'Model returned non-JSON; falling back to source.' };\n}\n\nconst prev = $('Build Per-Channel Prompt').item.json;\nconst rewritten = (parsed.rewritten_text || '').trim();\n\n// If rewrite returned empty, fall back to source — never post nothing.\nconst finalText = rewritten || prev.post_text;\n\nreturn [{ json: {\n  post_id: prev.post_id,\n  channel: prev.channel,\n  post_text: prev.post_text,\n  schedule_at: prev.schedule_at,\n  rewrite_enabled: prev.rewrite_enabled,\n  row_number: prev.row_number,\n  _post_text_final: finalText,\n  _rewrite_notes: parsed.notes || ''\n} }];\n"
+      }
+    },
+    {
+      "id": "mg-0001",
+      "name": "Merge Rewrite + Pass-Through",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1740, 400],
+      "parameters": {
+        "mode": "append",
+        "numberInputs": 2
+      }
+    },
+    {
+      "id": "sw-0002",
+      "name": "Switch - Route by Channel",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [1960, 400],
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose", "version": 2 },
+                "conditions": [
+                  {
+                    "id": "rule-fb",
+                    "leftValue": "={{ $json.channel }}",
+                    "rightValue": "fb",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose", "version": 2 },
+                "conditions": [
+                  {
+                    "id": "rule-li",
+                    "leftValue": "={{ $json.channel }}",
+                    "rightValue": "li",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose", "version": 2 },
+                "conditions": [
+                  {
+                    "id": "rule-discord",
+                    "leftValue": "={{ $json.channel }}",
+                    "rightValue": "discord",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ht-0002",
+      "name": "Post to FB Page",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2180, 240],
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v22.0/REPLACE_ME_fb_page_id/feed",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ message: $json._post_text_final, access_token: 'REPLACE_ME_fb_page_access_token' }) }}",
+        "options": { "response": { "response": { "neverError": true } } }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "ht-0003",
+      "name": "Post to LinkedIn Company",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2180, 400],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.linkedin.com/v2/ugcPosts",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer REPLACE_ME_linkedin_access_token" },
+            { "name": "X-Restli-Protocol-Version", "value": "2.0.0" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ author: 'urn:li:organization:REPLACE_ME_linkedin_org_id', lifecycleState: 'PUBLISHED', specificContent: { 'com.linkedin.ugc.ShareContent': { shareCommentary: { text: $json._post_text_final }, shareMediaCategory: 'NONE' } }, visibility: { 'com.linkedin.ugc.MemberNetworkVisibility': 'PUBLIC' } }) }}",
+        "options": { "response": { "response": { "neverError": true } } }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "ht-0004",
+      "name": "Post to Discord Webhook",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2180, 560],
+      "parameters": {
+        "method": "POST",
+        "url": "REPLACE_ME_discord_webhook_url",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "wait", "value": "true" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ content: $json._post_text_final }) }}",
+        "options": { "response": { "response": { "neverError": true } } }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "cd-0004",
+      "name": "Normalise Post Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2400, 400],
+      "parameters": {
+        "jsCode": "// Each item arrives here with the channel API's response body merged on top\n// of the original work item. We extract a per-channel result_url + success\n// signal so the Sheet update has uniform fields to write.\n\nconst items = $input.all().map(i => i.json);\n\nconst out = items.map(j => {\n  const channel = j.channel;\n  let success = false;\n  let result_url = '';\n  let error = '';\n\n  if (channel === 'fb') {\n    // FB Graph: success → { id: '<page_id>_<post_id>' }; failure → { error: { message: ... } }\n    if (j.id && typeof j.id === 'string') {\n      success = true;\n      result_url = `https://www.facebook.com/${j.id}`;\n    } else if (j.error) {\n      error = j.error.message || JSON.stringify(j.error);\n    } else {\n      error = 'Unknown FB response shape';\n    }\n  } else if (channel === 'li') {\n    // LinkedIn UGC: success → { id: 'urn:li:share:<id>' }; failure → { message: ..., status: 4xx }\n    if (j.id && String(j.id).startsWith('urn:li:share:')) {\n      success = true;\n      const shareId = String(j.id).replace('urn:li:share:', '');\n      result_url = `https://www.linkedin.com/feed/update/urn:li:share:${shareId}/`;\n    } else if (j.message) {\n      error = `LI ${j.status || ''}: ${j.message}`.trim();\n    } else {\n      error = 'Unknown LI response shape';\n    }\n  } else if (channel === 'discord') {\n    // Discord webhook with ?wait=true: success → { id, channel_id, guild_id? }; failure → { message, code }\n    if (j.id && j.channel_id) {\n      success = true;\n      result_url = j.guild_id\n        ? `https://discord.com/channels/${j.guild_id}/${j.channel_id}/${j.id}`\n        : `https://discord.com/channels/@me/${j.channel_id}/${j.id}`;\n    } else if (j.message) {\n      error = `Discord ${j.code || ''}: ${j.message}`.trim();\n    } else {\n      error = 'Unknown Discord response shape';\n    }\n  } else {\n    error = `Unsupported channel: ${channel}`;\n  }\n\n  return { json: {\n    post_id: j.post_id,\n    channel,\n    status: success ? 'posted' : 'failed',\n    posted_at: new Date().toISOString(),\n    result_url,\n    error,\n    _post_text_final: j._post_text_final,\n    _rewrite_notes: j._rewrite_notes || ''\n  } };\n});\n\nreturn out;\n"
+      }
+    },
+    {
+      "id": "gs-0002",
+      "name": "Update Sheet Row",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [2620, 400],
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_ME_queue_sheet_id",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "REPLACE_ME_queue_sheet_gid",
+          "mode": "id"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": ["post_id", "channel"],
+          "value": {
+            "post_id": "={{ $json.post_id }}",
+            "channel": "={{ $json.channel }}",
+            "status": "={{ $json.status }}",
+            "posted_at": "={{ $json.posted_at }}",
+            "result_url": "={{ $json.result_url }}",
+            "error": "={{ $json.error }}"
+          },
+          "schema": [
+            { "id": "post_id", "displayName": "post_id", "type": "string", "required": true, "canBeUsedToMatch": true },
+            { "id": "channel", "displayName": "channel", "type": "string", "required": true, "canBeUsedToMatch": true },
+            { "id": "status", "displayName": "status", "type": "string" },
+            { "id": "posted_at", "displayName": "posted_at", "type": "string" },
+            { "id": "result_url", "displayName": "result_url", "type": "string" },
+            { "id": "error", "displayName": "error", "type": "string" }
+          ]
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_ME_gsheets-posts-queue",
+          "name": "gsheets-posts-queue"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Schedule Trigger - Every Minute": {
+      "main": [[{ "node": "Read Sheet Rows", "type": "main", "index": 0 }]]
+    },
+    "Read Sheet Rows": {
+      "main": [[{ "node": "Filter Queued + Due", "type": "main", "index": 0 }]]
+    },
+    "Filter Queued + Due": {
+      "main": [[{ "node": "Build Per-Channel Prompt", "type": "main", "index": 0 }]]
+    },
+    "Build Per-Channel Prompt": {
+      "main": [[{ "node": "Switch - Rewrite Enabled?", "type": "main", "index": 0 }]]
+    },
+    "Switch - Rewrite Enabled?": {
+      "main": [
+        [{ "node": "Call Gemini 2.5 Flash", "type": "main", "index": 0 }],
+        [{ "node": "Merge Rewrite + Pass-Through", "type": "main", "index": 1 }]
+      ]
+    },
+    "Call Gemini 2.5 Flash": {
+      "main": [[{ "node": "Parse Gemini Output", "type": "main", "index": 0 }]]
+    },
+    "Parse Gemini Output": {
+      "main": [[{ "node": "Merge Rewrite + Pass-Through", "type": "main", "index": 0 }]]
+    },
+    "Merge Rewrite + Pass-Through": {
+      "main": [[{ "node": "Switch - Route by Channel", "type": "main", "index": 0 }]]
+    },
+    "Switch - Route by Channel": {
+      "main": [
+        [{ "node": "Post to FB Page", "type": "main", "index": 0 }],
+        [{ "node": "Post to LinkedIn Company", "type": "main", "index": 0 }],
+        [{ "node": "Post to Discord Webhook", "type": "main", "index": 0 }]
+      ]
+    },
+    "Post to FB Page": {
+      "main": [[{ "node": "Normalise Post Result", "type": "main", "index": 0 }]]
+    },
+    "Post to LinkedIn Company": {
+      "main": [[{ "node": "Normalise Post Result", "type": "main", "index": 0 }]]
+    },
+    "Post to Discord Webhook": {
+      "main": [[{ "node": "Normalise Post Result", "type": "main", "index": 0 }]]
+    },
+    "Normalise Post Result": {
+      "main": [[{ "node": "Update Sheet Row", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": []
+}
