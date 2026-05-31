@@ -1,0 +1,353 @@
+{
+  "name": "[TrendAI] - Customer Support Chatbot (web widget)",
+  "description": null,
+  "active": false,
+  "nodes": [
+    {
+      "id": "wh-0001",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 400],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "chatbot/customer-support",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "pg-0001",
+      "name": "Upsert Conversation + Insert User Msg",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [420, 400],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.conversations (id, customer_email) VALUES ('{{ ($json.body.conversation_id || '').replace(/'/g, \"''\") }}'::uuid, NULLIF('{{ ($json.body.customer_email || '').replace(/'/g, \"''\") }}','')) ON CONFLICT (id) DO UPDATE SET updated_at = now(), customer_email = COALESCE(EXCLUDED.customer_email, public.conversations.customer_email); INSERT INTO public.messages (conversation_id, role, content) VALUES ('{{ ($json.body.conversation_id || '').replace(/'/g, \"''\") }}'::uuid, 'user', '{{ ($json.body.message || '').replace(/'/g, \"''\") }}') RETURNING id, conversation_id;",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME_postgres-chatbot-rw",
+          "name": "postgres-chatbot-rw"
+        }
+      }
+    },
+    {
+      "id": "pg-0002",
+      "name": "Load History",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [640, 400],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_agg(t ORDER BY t.created_at) AS history FROM (SELECT role, content, created_at FROM public.messages WHERE conversation_id = '{{ ($('Webhook').item.json.body.conversation_id || '').replace(/'/g, \"''\") }}'::uuid ORDER BY created_at DESC LIMIT 20) t;",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME_postgres-chatbot-rw",
+          "name": "postgres-chatbot-rw"
+        }
+      }
+    },
+    {
+      "id": "cd-0001",
+      "name": "Build Gemini Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [860, 400],
+      "parameters": {
+        "jsCode": "const body = $('Webhook').item.json.body || {};\nconst history = ($input.first().json.history) || [];\n\nconst transcript = history\n  .filter(m => m.role !== 'system')\n  .map(m => `${m.role === 'user' ? 'Customer' : 'Assistant'}: ${m.content}`)\n  .join('\\n');\n\nconst systemPrompt = `You are a customer support assistant for ACME Co. Be concise, friendly, and accurate. If you don't know something, say so — do not invent product details, prices, or policies.\n\nYour task on EVERY turn:\n1. Classify the customer's intent into ONE of: qa | order_lookup | ticket_create | handoff\n2. Draft a response.\n3. Extract any structured fields needed by downstream tools.\n\nIntent rules:\n- order_lookup: customer asks about order status, tracking, delivery, \"where is my order\". Extract order_number if mentioned.\n- ticket_create: customer reports a specific problem needing human follow-up (refund, complaint, missing item, defect, escalation request). Extract subject + description + priority.\n- handoff: customer explicitly asks for a human, expresses frustration that QA can't resolve, or the issue requires operator judgement (legal, account changes, anything sensitive).\n- qa: general questions answerable from knowledge (returns policy, business hours, product info, how-to). Default for ambiguous cases.\n\nResponse drafting:\n- For qa: write the full final reply.\n- For order_lookup: write a reply that ends with the placeholder {{ORDER_DETAILS}} on its own line — downstream tooling will substitute live order data.\n- For ticket_create: write a confirming reply that ends with \"Your ticket reference is #{{TICKET_ID}}.\"\n- For handoff: write a brief holding reply telling the customer a teammate will follow up shortly.\n\nOutput ONLY a single JSON object, no prose, no code fences. Shape:\n{\n  \"intent\": \"qa\" | \"order_lookup\" | \"ticket_create\" | \"handoff\",\n  \"response_text\": \"<string>\",\n  \"order_query\": { \"order_number\": \"<string or empty>\", \"customer_email\": \"<string or empty>\" } | null,\n  \"ticket\": { \"subject\": \"<string>\", \"description\": \"<string>\", \"priority\": \"low|normal|high|urgent\" } | null,\n  \"handoff_reason\": \"<one sentence>\" | null\n}`;\n\nconst userPrompt = `Conversation so far:\\n${transcript || '(no prior messages)'}\\n\\nNew customer message:\\n${body.message || ''}\\n\\nCustomer email on file: ${body.customer_email || '(unknown)'}\\n\\nClassify intent + draft response. Return JSON only.`;\n\nconst fullPrompt = `${systemPrompt}\\n\\n---\\n\\n${userPrompt}`;\n\nreturn [{ json: {\n  conversation_id: body.conversation_id,\n  customer_email: body.customer_email || '',\n  user_message: body.message || '',\n  _gemini_prompt: fullPrompt\n} }];\n"
+      }
+    },
+    {
+      "id": "ht-0001",
+      "name": "Call Gemini 2.5 Flash",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1080, 400],
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googlePalmApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ contents: [{ parts: [{ text: $json._gemini_prompt }] }], generationConfig: { temperature: 0.2, maxOutputTokens: 2048, responseMimeType: 'application/json', thinkingConfig: { thinkingBudget: 0 } } }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "googlePalmApi": {
+          "id": "REPLACE_ME_gemini-2-5-flash",
+          "name": "gemini-2-5-flash"
+        }
+      }
+    },
+    {
+      "id": "cd-0002",
+      "name": "Parse Gemini Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1300, 400],
+      "parameters": {
+        "jsCode": "const gemini = $input.first().json;\nconst raw = gemini?.candidates?.[0]?.content?.parts?.[0]?.text || '{}';\n\nlet parsed;\ntry {\n  parsed = JSON.parse(raw);\n} catch (e) {\n  // Fall back to safe defaults if Gemini drifts from JSON\n  parsed = {\n    intent: 'handoff',\n    response_text: 'Thanks — let me get one of our team to follow up with you shortly.',\n    order_query: null,\n    ticket: null,\n    handoff_reason: 'Model returned non-JSON; routing to human for safety.'\n  };\n}\n\nconst valid = ['qa', 'order_lookup', 'ticket_create', 'handoff'];\nif (!valid.includes(parsed.intent)) parsed.intent = 'qa';\n\nconst prev = $('Build Gemini Prompt').item.json;\n\nreturn [{ json: {\n  conversation_id: prev.conversation_id,\n  customer_email: prev.customer_email,\n  user_message: prev.user_message,\n  intent: parsed.intent,\n  response_text: parsed.response_text || '',\n  order_query: parsed.order_query || null,\n  ticket: parsed.ticket || null,\n  handoff_reason: parsed.handoff_reason || null\n} }];\n"
+      }
+    },
+    {
+      "id": "sw-0001",
+      "name": "Route on Intent",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [1520, 400],
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose", "version": 2 },
+                "conditions": [
+                  {
+                    "id": "rule-qa",
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "qa",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose", "version": 2 },
+                "conditions": [
+                  {
+                    "id": "rule-order",
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "order_lookup",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose", "version": 2 },
+                "conditions": [
+                  {
+                    "id": "rule-ticket",
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "ticket_create",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose", "version": 2 },
+                "conditions": [
+                  {
+                    "id": "rule-handoff",
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "handoff",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": 0
+        }
+      }
+    },
+    {
+      "id": "pg-0003",
+      "name": "Lookup Order",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1760, 320],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT order_number, status, total_cents, currency, items, tracking_url, placed_at, customer_email FROM public.orders WHERE order_number = '{{ ($json.order_query && $json.order_query.order_number || '').replace(/'/g, \"''\") }}' OR (customer_email = NULLIF('{{ ($json.order_query && $json.order_query.customer_email || $json.customer_email || '').replace(/'/g, \"''\") }}','') AND '{{ ($json.order_query && $json.order_query.order_number || '').replace(/'/g, \"''\") }}' = '') ORDER BY placed_at DESC LIMIT 5;",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME_postgres-chatbot-rw",
+          "name": "postgres-chatbot-rw"
+        }
+      }
+    },
+    {
+      "id": "pg-0004",
+      "name": "Create Ticket",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1760, 460],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.tickets (conversation_id, customer_email, subject, description, priority) VALUES ('{{ ($json.conversation_id || '').replace(/'/g, \"''\") }}'::uuid, NULLIF('{{ ($json.customer_email || '').replace(/'/g, \"''\") }}',''), '{{ ($json.ticket && $json.ticket.subject || 'Customer-support follow-up').replace(/'/g, \"''\") }}', '{{ ($json.ticket && $json.ticket.description || $json.user_message || '').replace(/'/g, \"''\") }}', '{{ ($json.ticket && $json.ticket.priority || 'normal').replace(/'/g, \"''\") }}') RETURNING id, subject, priority, status;",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME_postgres-chatbot-rw",
+          "name": "postgres-chatbot-rw"
+        }
+      }
+    },
+    {
+      "id": "pg-0005",
+      "name": "Set Handoff Status",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1760, 600],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE public.conversations SET status = 'pending_human', metadata = metadata || jsonb_build_object('handoff_reason', '{{ ($json.handoff_reason || '').replace(/'/g, \"''\") }}', 'handoff_at', to_jsonb(now())) WHERE id = '{{ ($json.conversation_id || '').replace(/'/g, \"''\") }}'::uuid RETURNING id, status;",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME_postgres-chatbot-rw",
+          "name": "postgres-chatbot-rw"
+        }
+      }
+    },
+    {
+      "id": "ht-0002",
+      "name": "Notify Discord",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1980, 600],
+      "parameters": {
+        "method": "POST",
+        "url": "REPLACE_ME_discord_webhook_url",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ content: `**Handoff requested** — conversation ${$('Parse Gemini Output').item.json.conversation_id}\\nCustomer: ${$('Parse Gemini Output').item.json.customer_email || '(no email)'}\\nReason: ${$('Parse Gemini Output').item.json.handoff_reason || 'n/a'}\\nLast message: ${$('Parse Gemini Output').item.json.user_message}` }) }}",
+        "options": {}
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "mg-0001",
+      "name": "Merge Branches",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [2200, 400],
+      "parameters": {
+        "mode": "append",
+        "numberInputs": 4
+      }
+    },
+    {
+      "id": "cd-0003",
+      "name": "Compose Final Reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2420, 400],
+      "parameters": {
+        "jsCode": "// Pull the original Gemini-parse output (carries intent + draft response_text)\nconst parsed = $('Parse Gemini Output').item.json;\nlet finalText = parsed.response_text || '';\n\n// Branch-specific substitutions\nif (parsed.intent === 'order_lookup') {\n  // Pull all rows from Lookup Order\n  const rows = $('Lookup Order').all().map(i => i.json);\n  let orderBlock;\n  if (!rows.length) {\n    orderBlock = \"I couldn't find any orders matching that. Could you double-check the order number, or share the email used to place it?\";\n  } else {\n    orderBlock = rows.map(r => {\n      const total = (r.total_cents / 100).toFixed(2);\n      const tracking = r.tracking_url ? `\\n  Tracking: ${r.tracking_url}` : '';\n      return `• Order ${r.order_number} — ${r.status} — ${r.currency} ${total}${tracking}`;\n    }).join('\\n');\n  }\n  finalText = finalText.replace('{{ORDER_DETAILS}}', orderBlock);\n}\n\nif (parsed.intent === 'ticket_create') {\n  const ticket = $('Create Ticket').item.json;\n  finalText = finalText.replace('{{TICKET_ID}}', String(ticket.id || '???'));\n}\n\n// qa and handoff: response_text from Gemini is already final.\n\nreturn [{ json: {\n  conversation_id: parsed.conversation_id,\n  intent: parsed.intent,\n  response_text: finalText,\n  ticket_id: parsed.intent === 'ticket_create' ? $('Create Ticket').item.json.id : null,\n  order_count: parsed.intent === 'order_lookup' ? $('Lookup Order').all().length : null\n} }];\n"
+      }
+    },
+    {
+      "id": "pg-0006",
+      "name": "Insert Assistant Message",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [2640, 400],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.messages (conversation_id, role, content, intent_label) VALUES ('{{ ($json.conversation_id || '').replace(/'/g, \"''\") }}'::uuid, 'assistant', '{{ ($json.response_text || '').replace(/'/g, \"''\") }}', '{{ ($json.intent || '').replace(/'/g, \"''\") }}') RETURNING id;",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME_postgres-chatbot-rw",
+          "name": "postgres-chatbot-rw"
+        }
+      }
+    },
+    {
+      "id": "rs-0001",
+      "name": "Respond to Widget",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2860, 400],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: true, conversation_id: $('Compose Final Reply').item.json.conversation_id, intent: $('Compose Final Reply').item.json.intent, response: $('Compose Final Reply').item.json.response_text, ticket_id: $('Compose Final Reply').item.json.ticket_id, order_count: $('Compose Final Reply').item.json.order_count }) }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              { "name": "Access-Control-Allow-Origin", "value": "*" },
+              { "name": "Access-Control-Allow-Headers", "value": "content-type" }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "Upsert Conversation + Insert User Msg", "type": "main", "index": 0 }]]
+    },
+    "Upsert Conversation + Insert User Msg": {
+      "main": [[{ "node": "Load History", "type": "main", "index": 0 }]]
+    },
+    "Load History": {
+      "main": [[{ "node": "Build Gemini Prompt", "type": "main", "index": 0 }]]
+    },
+    "Build Gemini Prompt": {
+      "main": [[{ "node": "Call Gemini 2.5 Flash", "type": "main", "index": 0 }]]
+    },
+    "Call Gemini 2.5 Flash": {
+      "main": [[{ "node": "Parse Gemini Output", "type": "main", "index": 0 }]]
+    },
+    "Parse Gemini Output": {
+      "main": [[{ "node": "Route on Intent", "type": "main", "index": 0 }]]
+    },
+    "Route on Intent": {
+      "main": [
+        [{ "node": "Merge Branches", "type": "main", "index": 0 }],
+        [{ "node": "Lookup Order", "type": "main", "index": 0 }],
+        [{ "node": "Create Ticket", "type": "main", "index": 0 }],
+        [{ "node": "Set Handoff Status", "type": "main", "index": 0 }]
+      ]
+    },
+    "Lookup Order": {
+      "main": [[{ "node": "Merge Branches", "type": "main", "index": 1 }]]
+    },
+    "Create Ticket": {
+      "main": [[{ "node": "Merge Branches", "type": "main", "index": 2 }]]
+    },
+    "Set Handoff Status": {
+      "main": [[{ "node": "Notify Discord", "type": "main", "index": 0 }]]
+    },
+    "Notify Discord": {
+      "main": [[{ "node": "Merge Branches", "type": "main", "index": 3 }]]
+    },
+    "Merge Branches": {
+      "main": [[{ "node": "Compose Final Reply", "type": "main", "index": 0 }]]
+    },
+    "Compose Final Reply": {
+      "main": [[{ "node": "Insert Assistant Message", "type": "main", "index": 0 }]]
+    },
+    "Insert Assistant Message": {
+      "main": [[{ "node": "Respond to Widget", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": []
+}

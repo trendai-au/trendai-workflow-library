@@ -20,6 +20,7 @@ your own n8n instance.
 | [content-idea-enqueue](workflows/content-idea-enqueue/) | 4 | Minimal webhook → postgres queue producer (no-Sheets doctrine) | Postgres |
 | [case-study-followup](workflows/case-study-followup/) | 3 | Scheduled-task enqueue: `webhook → queue row with scheduled_for` | Postgres |
 | [openclaw-crash-alert](workflows/openclaw-crash-alert/) | 2 | Minimal alerting template — webhook → email (the bottom of an alert stack) | Gmail OAuth2 |
+| [customer-support-chatbot](workflows/customer-support-chatbot/) | 15 | Web-widget chatbot: Gemini 2.5 Flash intent routing → Q&A / order-lookup / ticket-create / human-handoff branches | Google PaLM API (Gemini), Postgres |
 
 ## Importing into your n8n
 
