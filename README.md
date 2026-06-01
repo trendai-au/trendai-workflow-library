@@ -11,7 +11,25 @@ that ran) in TrendAI production, scrubbed of credential IDs and
 tenant-specific URLs so you can fork them as a starting point for
 your own n8n instance.
 
-## Workflows
+> **New here?** Read [PRODUCTIZATION.md](./PRODUCTIZATION.md) for
+> how this library is positioned, what's productized vs raw, and how
+> to commission a custom variant.
+
+## Featured 5
+
+The five workflows we recommend starting with — each ships a
+standardised README, a `schema.sql` (where applicable), a
+case-study, and a `SCRIPT.md` screencast script ready for recording.
+
+| Workflow | What it does in one line | Why it's featured |
+|---|---|---|
+| [customer-support-chatbot](workflows/customer-support-chatbot/) | Embeddable web widget; one Gemini call classifies intent + drafts reply + emits structured fields; 4 branches handle side effects | The "advanced automation" headline — replaces a chatbot vendor SDK with 15 nodes |
+| [crm-data-enrichment](workflows/crm-data-enrichment/) | Sheets row in → Gemini enrichment + ICP scoring (deterministic, your-table-driven) → output Sheet + Postgres + Discord hot-lead ping | The highest business-value demo — auditable lead scoring without Clearbit/Apollo |
+| [social-media-scheduling](workflows/social-media-scheduling/) | Sheets queue → cron poll → optional per-channel Gemini rewrite → FB / LinkedIn / Discord fan-out with status write-back | The most-requested pattern — multi-channel scheduling without Buffer/Hootsuite |
+| [form-intake-lead-capture](workflows/form-intake-lead-capture/) | Webhook → Postgres persist-first → HubSpot upsert + Brevo email with per-step failure isolation IFs | The resilience flagship — never lose a submission to a downstream outage |
+| [knowledge-engine-summarise-save](workflows/knowledge-engine-summarise-save/) | Reusable sub-workflow — Gemini summarise + Supabase persist + Discord notify, called by N ingest parents | The architecture story — one summariser shared across multiple ingest sources |
+
+## All workflows
 
 | Workflow | Nodes | Purpose | Required credential types |
 |---|---:|---|---|

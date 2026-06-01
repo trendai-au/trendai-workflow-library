@@ -43,20 +43,20 @@ instance.
 
 ## Required schema
 
-A `submissions` table in your postgres database. Minimum columns the
-workflow reads/writes:
+The workflow expects a `submissions` table in your postgres database,
+inside a `form_intake` schema. Full DDL with indexes and the
+`updated_at` trigger is in [`schema.sql`](./schema.sql).
 
-```sql
-CREATE TABLE form_intake.submissions (
-  submission_id  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  source         TEXT NOT NULL,            -- 'lead-capture' here
-  payload        JSONB NOT NULL,           -- the raw webhook body
-  hubspot_status TEXT,                     -- 'ok' | 'error' | NULL
-  email_status   TEXT,                     -- 'ok' | 'error' | NULL
-  status         TEXT NOT NULL DEFAULT 'received',
-  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
-);
+- **`form_intake.submissions`** — one row per webhook submission.
+  Walks through `status` values `received → hubspot_ok → email_ok →
+  completed` (or `probe_completed` for health-check submissions). The
+  `hubspot_status` and `email_status` columns record per-step verdicts
+  so a partial failure leaves the row recoverable.
+
+Apply with:
+
+```bash
+psql "$POSTGRES_URL" -f schema.sql
 ```
 
 ## Setup
@@ -112,6 +112,59 @@ Useful for monitoring the webhook surface without polluting CRM.
 Each side effect is recorded in its own status column — a partial
 failure leaves the row recoverable. The `submission_id` returned to
 the caller is the postgres row's UUID.
+
+## Customisation guide (for consulting prospects)
+
+The point of this template is to be **easy to fork for a specific
+client**. The lift points are:
+
+1. **The CRM.** HubSpot is the default. Swap `HubSpot Upsert` for a
+   Pipedrive *Person — Update*, a Salesforce *Lead — Upsert*, or any
+   CRM with an upsert-by-email endpoint. The Insert / IF / Update
+   plumbing around it stays unchanged — failure isolation is the
+   value, not the specific CRM.
+2. **The transactional mailer.** Brevo is the default. Mailgun,
+   SendGrid, Postmark, Resend, and Amazon SES all follow the same
+   pattern: template ID + recipient + dynamic data. Replace the
+   `Client Confirm Email` HTTP node's URL + auth header + body shape,
+   leave the IF + status-update plumbing untouched.
+3. **The form fields.** The default payload is `email`, `firstname`,
+   `lastname`, `company`, `message`. Add fields by extending the
+   webhook payload, the `Insert Submission` JSONB column (no DDL
+   change needed — payload is JSONB), and the CRM upsert body. The
+   IF / Update / status-walk plumbing stays as-is.
+4. **The probe semantic.** The `probe: true` short-circuit is a
+   monitoring hook — `Mark Probe Completed` writes a `probe_completed`
+   row and exits. Wire your uptime monitor (Kuma, BetterStack, Pingdom)
+   to POST `{"probe": true}` once per minute; query `WHERE
+   status='probe_completed'` to confirm the full chain is live without
+   polluting CRM / mailer with synthetic contacts.
+5. **Failure-isolation in your own pipeline.** The IF-after-each-side-
+   effect pattern (HubSpot OK / Error → Update; Email OK / Error →
+   Update) is the reusable shape. Apply it any time you chain N
+   independent side effects where partial success is still partial
+   delivery — the row records what happened, a sweep job retries the
+   errored steps.
+
+## Anti-patterns this template demonstrates avoiding
+
+- **Single try / catch around the whole chain.** Wrapping HubSpot +
+  email in one error handler means a HubSpot 500 swallows the email
+  attempt — the customer gets nothing even though Brevo was up. Per-
+  step IFs decouple the failures.
+- **Propagate-then-persist.** The naïve shape is *call HubSpot, call
+  Brevo, then write a row*. If HubSpot 500s before the row exists,
+  the submission is gone with no audit trail. Persist first, propagate
+  second — the `submissions` row is the source of truth, not the CRM.
+- **In-flight retries.** The workflow records `hubspot_status='error'`
+  and moves on; it does not retry inline. A separate sweep job
+  (cron-driven `SELECT WHERE hubspot_status='error'` + replay) handles
+  retries idempotently against the same row's `submission_id`. Mixing
+  retry into the inline path multiplies side effects on flaky CRMs.
+- **Webhook URL exposed without an auth gate.** The default has no
+  auth — fine for templating, dangerous in production. Add HTTP
+  Header Auth on the Webhook node (operator-supplied bearer) or a
+  Cloudflare WAF rate-limit rule before exposing to real traffic.
 
 ## Known limitations
 
