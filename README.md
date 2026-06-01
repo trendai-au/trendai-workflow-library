@@ -29,6 +29,16 @@ case-study, and a `SCRIPT.md` screencast script ready for recording.
 | [form-intake-lead-capture](workflows/form-intake-lead-capture/) | Webhook → Postgres persist-first → HubSpot upsert + Brevo email with per-step failure isolation IFs | The resilience flagship — never lose a submission to a downstream outage |
 | [knowledge-engine-summarise-save](workflows/knowledge-engine-summarise-save/) | Reusable sub-workflow — Gemini summarise + Supabase persist + Discord notify, called by N ingest parents | The architecture story — one summariser shared across multiple ingest sources |
 
+### Advanced workflow
+
+One workflow sitting alongside the Featured 5 — a different input
+surface on the same downstream plumbing, ships standalone for callers
+who want voice-first qualification rather than a web form.
+
+| Workflow | What it does in one line | Why it's a sibling |
+|---|---|---|
+| [voice-agent](workflows/voice-agent/) | Vapi inbound voice agent qualifies the caller (name / business / need / timing / consent), submit_lead tool POSTs to n8n → postgres → HubSpot upsert + Brevo operator notification | Voice-first sibling of form-intake-lead-capture — same persist-first + failure-isolation doctrine, voice on the front end |
+
 ## All workflows
 
 | Workflow | Nodes | Purpose | Required credential types |
@@ -41,6 +51,7 @@ case-study, and a `SCRIPT.md` screencast script ready for recording.
 | [customer-support-chatbot](workflows/customer-support-chatbot/) | 15 | Web-widget chatbot: Gemini 2.5 Flash intent routing → Q&A / order-lookup / ticket-create / human-handoff branches | Google PaLM API (Gemini), Postgres |
 | [crm-data-enrichment](workflows/crm-data-enrichment/) | 12 | Google Sheets row → Gemini 2.5 Flash company/role/ICP enrichment → ICP-banded UPSERT to Postgres + output sheet + Discord hot-lead ping | Google Sheets Trigger OAuth2, Google Sheets OAuth2, Google PaLM API (Gemini), Postgres |
 | [social-media-scheduling](workflows/social-media-scheduling/) | 14 | Cron-polled Sheet queue → optional Gemini per-channel rewrite → FB Page / LinkedIn Company / Discord webhook → status + result_url written back to the row | Google Sheets OAuth2, Google PaLM API (Gemini), FB Page token (inline), LinkedIn access token (inline), Discord webhook URL (inline) |
+| [voice-agent](workflows/voice-agent/) | 15 | Vapi inbound voice agent calls `submit_lead` tool → webhook → postgres `voice_calls` (persist-first) → HubSpot batch upsert → Brevo operator notification, per-step failure-isolation IFs | Postgres, HTTP Header Auth (×2). External: Vapi assistant + phone number + ElevenLabs/Deepgram/OpenAI keys (Vapi-managed) |
 
 ## Importing into your n8n
 
