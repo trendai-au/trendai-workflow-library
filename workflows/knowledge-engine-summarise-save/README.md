@@ -1,5 +1,16 @@
 # Knowledge Engine — Summarise & Save (sub-workflow)
 
+
+<!-- E09.4-2-video-start -->
+## Video
+
+[![Watch the 2-minute walk-through](https://img.youtube.com/vi/Y-3CGlandP4/maxresdefault.jpg)](https://www.youtube.com/watch?v=Y-3CGlandP4)
+
+**[Watch on YouTube → https://www.youtube.com/watch?v=Y-3CGlandP4](https://www.youtube.com/watch?v=Y-3CGlandP4)**
+
+A 2-minute walk-through of the workflow: what it does, how the nodes wire up, and what you change to fork it for your stack. Part of the [TrendAI Workflow Library "Workflows" playlist](https://www.youtube.com/playlist?list=PLnl2DWExbS90Bw74p_gL9o8Ut9F88C8PX).
+<!-- E09.4-2-video-end -->
+
 A reusable sub-workflow invoked by N parent workflows (article ingest,
 inbox ingest, YouTube ingest, …). Encapsulates the **"feed me an
 item, get back a summary + persisted row + a notification"** pattern.
