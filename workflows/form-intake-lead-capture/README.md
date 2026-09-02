@@ -1,16 +1,5 @@
 # Form Intake — Lead Capture (postgres → HubSpot → Brevo)
 
-
-<!-- E09.4-2-video-start -->
-## Video
-
-[![Watch the 2-minute walk-through](https://img.youtube.com/vi/yRLpThnC4Fs/maxresdefault.jpg)](https://www.youtube.com/watch?v=yRLpThnC4Fs)
-
-**[Watch on YouTube → https://www.youtube.com/watch?v=yRLpThnC4Fs](https://www.youtube.com/watch?v=yRLpThnC4Fs)**
-
-A 2-minute walk-through of the workflow: what it does, how the nodes wire up, and what you change to fork it for your stack. Part of the [TrendAI Workflow Library "Workflows" playlist](https://www.youtube.com/playlist?list=PLnl2DWExbS90Bw74p_gL9o8Ut9F88C8PX).
-<!-- E09.4-2-video-end -->
-
 Production form-intake chain following the **resumable-pipeline
 doctrine**: persist the raw submission first, propagate to downstream
 systems, mark per-step state so retries are idempotent.

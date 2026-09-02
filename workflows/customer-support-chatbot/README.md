@@ -1,16 +1,5 @@
 # Customer Support Chatbot — web widget + intent routing
 
-
-<!-- E09.4-2-video-start -->
-## Video
-
-[![Watch the 2-minute walk-through](https://img.youtube.com/vi/scT3g1vnuU0/maxresdefault.jpg)](https://www.youtube.com/watch?v=scT3g1vnuU0)
-
-**[Watch on YouTube → https://www.youtube.com/watch?v=scT3g1vnuU0](https://www.youtube.com/watch?v=scT3g1vnuU0)**
-
-A 2-minute walk-through of the workflow: what it does, how the nodes wire up, and what you change to fork it for your stack. Part of the [TrendAI Workflow Library "Workflows" playlist](https://www.youtube.com/playlist?list=PLnl2DWExbS90Bw74p_gL9o8Ut9F88C8PX).
-<!-- E09.4-2-video-end -->
-
 A production-shaped n8n workflow that powers an embeddable customer
 support chatbot. One Gemini 2.5 Flash call classifies the customer's
 intent and drafts a response; the workflow then routes to one of four

@@ -1,16 +1,5 @@
 # CRM Data Enrichment — Sheets in, ICP-scored leads out
 
-
-<!-- E09.4-2-video-start -->
-## Video
-
-[![Watch the 2-minute walk-through](https://img.youtube.com/vi/kf_DdG4gWlM/maxresdefault.jpg)](https://www.youtube.com/watch?v=kf_DdG4gWlM)
-
-**[Watch on YouTube → https://www.youtube.com/watch?v=kf_DdG4gWlM](https://www.youtube.com/watch?v=kf_DdG4gWlM)**
-
-A 2-minute walk-through of the workflow: what it does, how the nodes wire up, and what you change to fork it for your stack. Part of the [TrendAI Workflow Library "Workflows" playlist](https://www.youtube.com/playlist?list=PLnl2DWExbS90Bw74p_gL9o8Ut9F88C8PX).
-<!-- E09.4-2-video-end -->
-
 A production-shaped n8n workflow that turns a thin contact record
 (name + email + company) into a structured B2B enrichment + an
 ICP-band classification, ready for differentiated outbound treatment.

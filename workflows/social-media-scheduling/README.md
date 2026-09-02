@@ -1,16 +1,5 @@
 # Social Media Scheduling — Sheets queue → FB / LinkedIn / Discord
 
-
-<!-- E09.4-2-video-start -->
-## Video
-
-[![Watch the 2-minute walk-through](https://img.youtube.com/vi/pzhYQzkrT_s/maxresdefault.jpg)](https://www.youtube.com/watch?v=pzhYQzkrT_s)
-
-**[Watch on YouTube → https://www.youtube.com/watch?v=pzhYQzkrT_s](https://www.youtube.com/watch?v=pzhYQzkrT_s)**
-
-A 2-minute walk-through of the workflow: what it does, how the nodes wire up, and what you change to fork it for your stack. Part of the [TrendAI Workflow Library "Workflows" playlist](https://www.youtube.com/playlist?list=PLnl2DWExbS90Bw74p_gL9o8Ut9F88C8PX).
-<!-- E09.4-2-video-end -->
-
 A production-shaped n8n workflow that turns a Google Sheet into a
 **multi-channel post scheduler**: write a row with `post_text`,
 `channel`, and `schedule_at`, and the workflow picks it up on the next
