@@ -9,6 +9,23 @@ The accompanying `web-widget.html` is a drop-in floating chat bubble
 that posts to the workflow's webhook — no build step, no framework,
 no third-party JS deps.
 
+## Video
+
+**[Build a Customer Support Chatbot in n8n (15 nodes, one LLM call, zero SDKs)](https://youtu.be/cpkUs1ljllU)** — 2:56
+
+A screencast of this workflow actually running: the canvas, the intent
+router's four branches, the schema and its seeded orders, the widget
+config block, and a live handoff landing in Discord.
+
+Two things it shows that this README cannot. **The LLM step is one HTTP
+node** — the video runs it against a self-hosted model while the JSON in
+this folder is wired to Gemini, and swapping that is a node rather than a
+rewrite. And **the round trip takes eight to sixteen seconds**, which is
+left visible rather than cut out: two Postgres round-trips, the model
+call, then two more writes.
+
+Narration is synthesised speech, and the video says so.
+
 ## Pattern
 
 ```
