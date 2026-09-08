@@ -1,22 +1,40 @@
 # Screencast script — Customer Support Chatbot
 
 **Target length:** 2:30–3:00
-**Audience:** consulting prospects evaluating "can n8n + Gemini replace a
+**Audience:** consulting prospects evaluating "can n8n + an LLM replace a
 chatbot vendor for my SMB?"
-**Recording surface:** OBS / Loom; screen-share n8n editor + a browser
+**Recording surface:** region screen capture; n8n editor + a browser
 tab open on `web-widget.html`.
+
+> **REVISED 2026-09-08 (TOS-06-03) so the words match what is on screen.**
+> The repo ships this workflow wired to **Gemini 2.5 Flash**, and that has not
+> changed. The recording runs it against **our own LLM** — `qwen2.5:7b` on the
+> s07 runtime — at the operator's instruction, so every voice line that named
+> Gemini as *the* model now names the LLM step instead. The point of the
+> pattern is that this is ONE HTTP node, and the video says so out loud rather
+> than hiding the difference.
+>
+> **The round trip is 8–16 SECONDS, not two.** Measured through the widget on
+> 2026-09-08: 16.0s warm end-to-end (two Postgres round-trips, the LLM call,
+> then two more writes), 8.4s for a short handoff reply. The old "within 2s"
+> line was written before anything had been run and is not achievable on this
+> stack. Leave the typing indicator visible and cut the wait — do NOT stage it
+> to look instant.
 
 ---
 
 ## Scene 1 — Hook (0:00–0:15)
 
 **Visual:** the `web-widget.html` floating bubble open in a browser,
-typing "where is my order ORD-1001?" and hitting Send. Reply renders
-within 2s with the order details.
+typing "where is my order ORD-1001?" and hitting Send. The typing
+indicator runs for roughly ten seconds, then the reply renders with the
+live order details pulled from Postgres. Cut the wait, keep the
+indicator — the delay is real and staging it away would be a lie about
+what this stack does.
 
 **Voice (script):**
 > Here's a customer-support chatbot that classifies intent, routes to
-> the right backend, and replies — all in one n8n workflow, one Gemini
+> the right backend, and replies — all in one n8n workflow, one LLM
 > call, and 15 nodes. No vendor SDK, no monthly seat fee. Let me show
 > you what's inside.
 
@@ -28,10 +46,16 @@ Zoom on the Pattern diagram from the README (overlay or scroll).
 **Voice:**
 > The webhook receives a customer message, upserts the conversation
 > row, loads the last 20 turns from Postgres, and builds a prompt.
-> Then *one* Gemini 2.5 Flash call does three things at once: classify
-> the intent, draft the reply with placeholders, and emit structured
-> fields. The four downstream branches only run the side effects —
-> order lookup, ticket creation, status change, or human handoff.
+> Then *one* LLM call does three things at once: classify the intent,
+> draft the reply with placeholders, and emit structured fields. The
+> four downstream branches only run the side effects — order lookup,
+> ticket creation, status change, or human handoff.
+>
+> And that call is a single HTTP node. The repo ships it pointed at
+> Gemini 2.5 Flash; I'm running it here against a model on our own
+> box. Swapping the provider is one node, not a rewrite — which is the
+> whole reason the intelligence sits in one place instead of being
+> smeared across four branches.
 
 ## Scene 3 — The intent router (0:45–1:30)
 
@@ -40,10 +64,10 @@ output rules. Then click into `Compose Final Reply`, show how it fills
 `{{ORDER_DETAILS}}` and `{{TICKET_ID}}` placeholders.
 
 **Voice:**
-> The Switch routes on `intent`, which Gemini returned as a structured
+> The Switch routes on `intent`, which the model returned as a structured
 > field — not parsed from prose. Each branch runs its side effect, then
 > all four merge back. The final reply isn't re-written per branch —
-> Gemini drafted it with placeholders, and each branch just substitutes
+> the model drafted it with placeholders, and each branch just substitutes
 > its data. Tone stays consistent without per-branch prompt engineering.
 
 ## Scene 4 — The schema (1:30–2:00)
@@ -98,9 +122,11 @@ handoff notification in real time.
 
 ## Recording notes
 
-- Use the sanitised `REPLACE_ME_…` placeholders on-screen — never show
-  a real Gemini key, real Discord webhook URL, or a real DB connection
-  string.
+- Never show a real API key, Discord webhook URL, or DB connection
+  string. In the TOS-06-03 recording setup every one of those is behind
+  an n8n **credential**, which the editor masks — the LLM, Discord and
+  Postgres nodes carry no plaintext secret to expose. Do not open the
+  credential manager on camera.
 - The end-to-end demo runs against the seeded `orders` table; no live
   CRM connection needed.
 - Keep cursor highlight on (Loom: enabled by default; OBS: install a
